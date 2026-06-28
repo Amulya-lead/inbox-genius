@@ -28,14 +28,14 @@ export const triageEmail = createServerFn({ method: "POST" })
     if (!key) throw new Error("Missing LOVABLE_API_KEY");
 
     const gateway = createLovableAiGatewayProvider(key);
-    const { experimental_output } = await generateText({
+    const { output } = await generateText({
       model: gateway("google/gemini-3-flash-preview"),
-      experimental_output: Output.object({ schema: TriageSchema }),
+      output: Output.object({ schema: TriageSchema }),
       system:
         "You are an inbox triage AI. Classify priority, extract action items, identify deadlines, flag phishing. Be concise and decisive.",
       prompt: `From: ${data.from}\nSubject: ${data.subject}\n\n${data.body}`,
     });
-    return experimental_output;
+    return output;
   });
 
 const ReplyInput = z.object({
@@ -73,13 +73,13 @@ export const composeEmail = createServerFn({ method: "POST" })
     if (!key) throw new Error("Missing LOVABLE_API_KEY");
 
     const gateway = createLovableAiGatewayProvider(key);
-    const { experimental_output } = await generateText({
+    const { output } = await generateText({
       model: gateway("google/gemini-3-flash-preview"),
-      experimental_output: Output.object({
+      output: Output.object({
         schema: z.object({ subject: z.string(), body: z.string() }),
       }),
       system: `You compose professional emails. Tone: ${data.tone}. Sign as "Best,".`,
       prompt: data.prompt,
     });
-    return experimental_output;
+    return output;
   });
