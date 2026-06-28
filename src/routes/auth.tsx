@@ -183,11 +183,38 @@ function AuthPage() {
             ))}
           </Tabs>
 
-          <p className="mt-6 flex items-center gap-2 text-xs text-muted-foreground">
-            <ShieldCheck className="h-3.5 w-3.5 text-primary" />
-            Your inbox stays private — we never store message content beyond what
-            you choose to triage.
-          </p>
+          <div className="mt-6 rounded-lg border border-primary/30 bg-primary/5 p-3 text-xs">
+            <div className="flex items-center gap-1.5 font-semibold text-primary">
+              <ShieldCheck className="h-3.5 w-3.5" /> Demo credentials
+            </div>
+            <div className="mt-1.5 text-muted-foreground space-y-0.5 font-mono">
+              <div>email: <span className="text-foreground">demo@mailsense.app</span></div>
+              <div>password: <span className="text-foreground">demo1234</span></div>
+            </div>
+            <button
+              type="button"
+              className="mt-2 text-primary hover:underline"
+              onClick={async () => {
+                setLoading(true);
+                const creds = { email: "demo@mailsense.app", password: "demo1234" };
+                let { error } = await supabase.auth.signInWithPassword(creds);
+                if (error) {
+                  const up = await supabase.auth.signUp({
+                    ...creds,
+                    options: { emailRedirectTo: window.location.origin },
+                  });
+                  error = up.error ?? null;
+                  if (!up.error) {
+                    await supabase.auth.signInWithPassword(creds);
+                  }
+                }
+                if (error) toast.error(error.message);
+                setLoading(false);
+              }}
+            >
+              → Sign in as demo user
+            </button>
+          </div>
         </div>
       </div>
     </main>
