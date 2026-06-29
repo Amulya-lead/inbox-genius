@@ -508,6 +508,16 @@ function DashboardPage() {
             <Button variant="ghost" onClick={() => setComposeOpen(false)}>Cancel</Button>
             <Button
               onClick={() => {
+                setSentLog((l) => [
+                  ...l,
+                  {
+                    id: `c-${Date.now()}`,
+                    subject: composeSubject,
+                    to: "draft@inbox",
+                    at: new Date().toISOString(),
+                    kind: "compose",
+                  },
+                ]);
                 toast.success("Email sent (demo)");
                 setComposeOpen(false);
                 setComposePrompt(""); setComposeSubject(""); setComposeBody("");
