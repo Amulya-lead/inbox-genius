@@ -34,6 +34,7 @@ import {
 } from "@/lib/mock-emails";
 import { syncBatches } from "@/lib/sync-pool";
 import { triageEmail, generateReply, composeEmail } from "@/lib/ai.functions";
+import { InboxAnalytics } from "@/components/inbox-analytics";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
@@ -47,8 +48,10 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog";
-import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
+import { Select, SelectContent, SelectItem, SelectItem as _Si, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { cn } from "@/lib/utils";
+
+type SentItem = { id: string; subject: string; to: string; at: string; kind: "reply" | "compose" };
 
 export const Route = createFileRoute("/_authenticated/dashboard")({
   ssr: false,
