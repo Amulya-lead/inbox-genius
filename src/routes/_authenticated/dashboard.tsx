@@ -106,6 +106,8 @@ function DashboardPage() {
   const [composeBody, setComposeBody] = useState("");
   const [composeLoading, setComposeLoading] = useState(false);
 
+  const [sentLog, setSentLog] = useState<SentItem[]>([]);
+
   useEffect(() => {
     supabase.auth.getUser().then(({ data }) => setEmail(data.user?.email ?? ""));
   }, []);
