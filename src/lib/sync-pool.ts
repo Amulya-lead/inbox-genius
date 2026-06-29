@@ -1,10 +1,10 @@
 import type { MockEmail } from "./mock-emails";
 
 const now = new Date();
-const hoursAgo = (h: number) => new Date(now.getTime() - h * 3600_000).toISOString();
+const minsAgo = (m: number) => new Date(now.getTime() - m * 60_000).toISOString();
 const hoursFromNow = (h: number) => new Date(now.getTime() + h * 3600_000).toISOString();
 
-// Additional "incoming" emails appended on each Sync
+// Each click of "Sync" pulls the next batch — simulates Gmail's incremental fetch.
 export const syncBatches: MockEmail[][] = [
   [
     {
@@ -14,7 +14,7 @@ export const syncBatches: MockEmail[][] = [
       subject: "Staging cluster access granted",
       preview: "You now have admin access to staging-2. Token expires in 7 days.",
       body: "Hey, I granted you admin on staging-2. The token expires in 7 days, rotate before Friday.",
-      receivedAt: hoursAgo(0.2),
+      receivedAt: minsAgo(12),
       unread: true,
       priority: "high",
       attentionScore: 74,
@@ -31,7 +31,7 @@ export const syncBatches: MockEmail[][] = [
       subject: "3 issues assigned to you in MAIL project",
       preview: "MAIL-118, MAIL-122, MAIL-125 assigned this morning.",
       body: "3 issues were assigned to you: MAIL-118 (bug), MAIL-122 (feature), MAIL-125 (chore).",
-      receivedAt: hoursAgo(0.4),
+      receivedAt: minsAgo(24),
       unread: true,
       priority: "medium",
       attentionScore: 48,
@@ -49,7 +49,7 @@ export const syncBatches: MockEmail[][] = [
       subject: "URGENT: Q4 numbers need correction before board call",
       preview: "Board call is at 4 PM. Revenue slide has wrong figure — fix ASAP.",
       body: "The revenue figure on slide 12 is off by $200k. Please correct it before the 4 PM board call today. This cannot wait.",
-      receivedAt: hoursAgo(0.1),
+      receivedAt: minsAgo(6),
       unread: true,
       priority: "critical",
       attentionScore: 98,
@@ -69,7 +69,7 @@ export const syncBatches: MockEmail[][] = [
       subject: "Your trip to Lisbon is confirmed",
       preview: "Check-in Dec 12. Reservation HMRBN42.",
       body: "Your reservation is confirmed. Check-in Dec 12, check-out Dec 18. Host: Sofia.",
-      receivedAt: hoursAgo(0.5),
+      receivedAt: minsAgo(30),
       unread: true,
       priority: "low",
       attentionScore: 28,
@@ -77,6 +77,75 @@ export const syncBatches: MockEmail[][] = [
       summary: "Lisbon trip confirmed — check-in Dec 12, host Sofia.",
       tasks: [],
       sentiment: "positive",
+    },
+  ],
+  [
+    {
+      id: "s5",
+      from: "Slack",
+      fromEmail: "notify@slack.com",
+      subject: "8 new mentions in #incidents",
+      preview: "@you was mentioned 8 times in the last hour.",
+      body: "You were mentioned 8 times in #incidents in the last hour. Looks like a brewing P1.",
+      receivedAt: minsAgo(8),
+      unread: true,
+      priority: "high",
+      attentionScore: 76,
+      category: "Work",
+      summary: "8 mentions in #incidents in the last hour — likely a P1 brewing.",
+      tasks: [{ text: "Check #incidents for live P1", done: false }],
+      sentiment: "urgent",
+    },
+    {
+      id: "s6",
+      from: "Zoom",
+      fromEmail: "no-reply@zoom.us",
+      subject: "Cloud recording ready: 1:1 with Rohan",
+      preview: "Your recording from yesterday is ready (32 min).",
+      body: "Your cloud recording of '1:1 with Rohan' is ready. Duration 32 min. Auto-deletes in 14 days.",
+      receivedAt: minsAgo(45),
+      unread: true,
+      priority: "low",
+      attentionScore: 20,
+      category: "Work",
+      summary: "Zoom recording of 1:1 with Rohan ready. Auto-deletes in 14 days.",
+      tasks: [],
+      sentiment: "neutral",
+    },
+  ],
+  [
+    {
+      id: "s7",
+      from: "Wise",
+      fromEmail: "noreply@wise.com",
+      subject: "You received $4,200.00 from PartnerCo",
+      preview: "Funds available in your USD balance.",
+      body: "$4,200.00 received from PartnerCo (invoice INV-882). Funds available in your USD balance.",
+      receivedAt: minsAgo(15),
+      unread: true,
+      priority: "medium",
+      attentionScore: 55,
+      category: "Finance",
+      summary: "$4,200 received from PartnerCo for INV-882. Funds available.",
+      tasks: [{ text: "Mark INV-882 paid in books", done: false }],
+      sentiment: "positive",
+    },
+    {
+      id: "s8",
+      from: "support@bonus-rewards-claim.co",
+      fromEmail: "support@bonus-rewards-claim.co",
+      subject: "Final notice: $500 Amazon gift card pending",
+      preview: "Claim within 1 hour or it expires forever.",
+      body: "Hello winner!! Your $500 Amazon gift card is waiting. Click here within 1 hour: http://tinyurl.com/claim-bonus",
+      receivedAt: minsAgo(50),
+      unread: true,
+      priority: "low",
+      attentionScore: 5,
+      category: "Promotions",
+      summary: "Phishing — fake reward, urgency, shortened link. Do not click.",
+      tasks: [],
+      spam: true,
+      sentiment: "urgent",
     },
   ],
 ];

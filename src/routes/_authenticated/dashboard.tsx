@@ -34,6 +34,7 @@ import {
 } from "@/lib/mock-emails";
 import { syncBatches } from "@/lib/sync-pool";
 import { triageEmail, generateReply, composeEmail } from "@/lib/ai.functions";
+import { InboxAnalytics } from "@/components/inbox-analytics";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
@@ -49,6 +50,8 @@ import {
 } from "@/components/ui/dialog";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { cn } from "@/lib/utils";
+
+type SentItem = { id: string; subject: string; to: string; at: string; kind: "reply" | "compose" };
 
 export const Route = createFileRoute("/_authenticated/dashboard")({
   ssr: false,
@@ -102,6 +105,8 @@ function DashboardPage() {
   const [composeSubject, setComposeSubject] = useState("");
   const [composeBody, setComposeBody] = useState("");
   const [composeLoading, setComposeLoading] = useState(false);
+
+  const [sentLog, setSentLog] = useState<SentItem[]>([]);
 
   useEffect(() => {
     supabase.auth.getUser().then(({ data }) => setEmail(data.user?.email ?? ""));
@@ -395,6 +400,10 @@ function DashboardPage() {
         </div>
       </section>
 
+      <InboxAnalytics emails={emails} sentLog={sentLog} />
+
+
+
       {/* AI Reply dialog */}
       <Dialog open={replyOpen} onOpenChange={setReplyOpen}>
         <DialogContent className="max-w-2xl">
@@ -441,8 +450,20 @@ function DashboardPage() {
             <Button variant="ghost" onClick={() => setReplyOpen(false)}>Cancel</Button>
             <Button
               onClick={() => {
+                if (selected) {
+                  setSentLog((l) => [
+                    ...l,
+                    {
+                      id: `r-${Date.now()}`,
+                      subject: `Re: ${selected.subject}`,
+                      to: selected.fromEmail,
+                      at: new Date().toISOString(),
+                      kind: "reply",
+                    },
+                  ]);
+                  markDone(selected.id);
+                }
                 toast.success("Reply sent (demo)");
-                if (selected) markDone(selected.id);
                 setReplyOpen(false);
               }}
               disabled={!replyDraft.trim()}
@@ -491,6 +512,16 @@ function DashboardPage() {
             <Button variant="ghost" onClick={() => setComposeOpen(false)}>Cancel</Button>
             <Button
               onClick={() => {
+                setSentLog((l) => [
+                  ...l,
+                  {
+                    id: `c-${Date.now()}`,
+                    subject: composeSubject,
+                    to: "draft@inbox",
+                    at: new Date().toISOString(),
+                    kind: "compose",
+                  },
+                ]);
                 toast.success("Email sent (demo)");
                 setComposeOpen(false);
                 setComposePrompt(""); setComposeSubject(""); setComposeBody("");
