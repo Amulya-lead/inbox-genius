@@ -446,8 +446,20 @@ function DashboardPage() {
             <Button variant="ghost" onClick={() => setReplyOpen(false)}>Cancel</Button>
             <Button
               onClick={() => {
+                if (selected) {
+                  setSentLog((l) => [
+                    ...l,
+                    {
+                      id: `r-${Date.now()}`,
+                      subject: `Re: ${selected.subject}`,
+                      to: selected.fromEmail,
+                      at: new Date().toISOString(),
+                      kind: "reply",
+                    },
+                  ]);
+                  markDone(selected.id);
+                }
                 toast.success("Reply sent (demo)");
-                if (selected) markDone(selected.id);
                 setReplyOpen(false);
               }}
               disabled={!replyDraft.trim()}
