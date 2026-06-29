@@ -400,6 +400,10 @@ function DashboardPage() {
         </div>
       </section>
 
+      <InboxAnalytics emails={emails} sentLog={sentLog} />
+
+
+
       {/* AI Reply dialog */}
       <Dialog open={replyOpen} onOpenChange={setReplyOpen}>
         <DialogContent className="max-w-2xl">
