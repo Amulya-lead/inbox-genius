@@ -5,7 +5,7 @@ import { toast } from "sonner";
 import { Loader2, Mail, ShieldCheck } from "lucide-react";
 
 import { supabase } from "@/integrations/supabase/client";
-import { lovable } from "@/integrations/lovable/index";
+
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -36,7 +36,7 @@ function AuthPage() {
 
   useEffect(() => {
     supabase.auth.getSession().then(({ data }) => {
-      if (data.session) navigate({ to: "/dashboard" });
+      if (data.session) navigate({ to: "/dashboard", replace: true });
     });
     const { data: sub } = supabase.auth.onAuthStateChange((_event, session) => {
       if (session) navigate({ to: "/dashboard" });
@@ -55,6 +55,7 @@ function AuthPage() {
       toast.error(parsed.error.issues[0]?.message ?? "Invalid input");
       return;
     }
+
     setLoading(true);
     try {
       if (mode === "signup") {
@@ -80,16 +81,21 @@ function AuthPage() {
   async function handleGoogle() {
     setOauthLoading(true);
     try {
-      const result = await lovable.auth.signInWithOAuth("google", {
-        redirect_uri: window.location.origin,
+      const { error } = await supabase.auth.signInWithOAuth({
+        provider: "google",
+        options: {
+          redirectTo: window.location.origin,
+          scopes: "https://www.googleapis.com/auth/gmail.readonly https://www.googleapis.com/auth/gmail.send",
+          queryParams: {
+            access_type: "offline",
+            prompt: "consent",
+          },
+        },
       });
-      if (result.error) {
-        toast.error(result.error.message ?? "Google sign-in failed");
-        setOauthLoading(false);
-        return;
+
+      if (error) {
+        throw error;
       }
-      if (result.redirected) return;
-      // session set; effect will redirect
     } catch (err) {
       toast.error(err instanceof Error ? err.message : "Google sign-in failed");
       setOauthLoading(false);
@@ -185,35 +191,11 @@ function AuthPage() {
 
           <div className="mt-6 rounded-lg border border-primary/30 bg-primary/5 p-3 text-xs">
             <div className="flex items-center gap-1.5 font-semibold text-primary">
-              <ShieldCheck className="h-3.5 w-3.5" /> Demo credentials
+              <ShieldCheck className="h-3.5 w-3.5" /> Secure access
             </div>
-            <div className="mt-1.5 text-muted-foreground space-y-0.5 font-mono">
-              <div>email: <span className="text-foreground">demo@mailsense.app</span></div>
-              <div>password: <span className="text-foreground">demo1234</span></div>
+            <div className="mt-1.5 text-muted-foreground">
+              Use your Google account or email/password to access your own inbox.
             </div>
-            <button
-              type="button"
-              className="mt-2 text-primary hover:underline"
-              onClick={async () => {
-                setLoading(true);
-                const creds = { email: "demo@mailsense.app", password: "demo1234" };
-                let { error } = await supabase.auth.signInWithPassword(creds);
-                if (error) {
-                  const up = await supabase.auth.signUp({
-                    ...creds,
-                    options: { emailRedirectTo: window.location.origin },
-                  });
-                  error = up.error ?? null;
-                  if (!up.error) {
-                    await supabase.auth.signInWithPassword(creds);
-                  }
-                }
-                if (error) toast.error(error.message);
-                setLoading(false);
-              }}
-            >
-              → Sign in as demo user
-            </button>
           </div>
         </div>
       </div>

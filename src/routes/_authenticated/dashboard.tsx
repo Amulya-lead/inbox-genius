@@ -1,25 +1,33 @@
 import { createFileRoute, useNavigate, Link } from "@tanstack/react-router";
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { toast } from "sonner";
 import {
   AlertTriangle,
+  Archive,
   Bell,
+  BriefcaseBusiness,
   CheckCircle2,
   Clock,
+  HeartHandshake,
   Filter,
   Inbox,
+  KeyRound,
   ListTodo,
   LogOut,
   Loader2,
   Mail,
   PenLine,
+  Reply,
   RefreshCw,
   Search,
   Send,
   ShieldAlert,
   Sparkles,
+  Star,
   TimerReset,
+  Trash2,
   TrendingUp,
+  UserPlus,
   Wand2,
 } from "lucide-react";
 
@@ -32,7 +40,7 @@ import {
   type MockEmail,
   type Priority,
 } from "@/lib/mock-emails";
-import { syncBatches } from "@/lib/sync-pool";
+import { fetchInboxMessages, getConfiguredInboxProvider, sendGmailMessage, type GmailMailbox } from "@/lib/inbox-sync";
 import { triageEmail, generateReply, composeEmail } from "@/lib/ai.functions";
 import { InboxAnalytics } from "@/components/inbox-analytics";
 import { Button } from "@/components/ui/button";
@@ -52,6 +60,18 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { cn } from "@/lib/utils";
 
 type SentItem = { id: string; subject: string; to: string; at: string; kind: "reply" | "compose" };
+type ComposePurpose = "general" | "follow-up" | "request" | "apology" | "introduction" | "meeting" | "thank-you" | "leave";
+
+const COMPOSE_PURPOSES: { value: ComposePurpose; label: string; hint: string; icon: React.ReactNode }[] = [
+  { value: "general", label: "General", hint: "A clear everyday email", icon: <PenLine className="h-4 w-4" /> },
+  { value: "follow-up", label: "Follow-up", hint: "Nudge without sounding pushy", icon: <Reply className="h-4 w-4" /> },
+  { value: "request", label: "Request", hint: "Ask for help or approval", icon: <KeyRound className="h-4 w-4" /> },
+  { value: "apology", label: "Apology", hint: "Own the situation gracefully", icon: <HeartHandshake className="h-4 w-4" /> },
+  { value: "introduction", label: "Introduction", hint: "Start a useful connection", icon: <UserPlus className="h-4 w-4" /> },
+  { value: "meeting", label: "Meeting", hint: "Propose time with context", icon: <BriefcaseBusiness className="h-4 w-4" /> },
+  { value: "thank-you", label: "Thank you", hint: "Make appreciation specific", icon: <Sparkles className="h-4 w-4" /> },
+  { value: "leave", label: "Leave / time off", hint: "Request time away", icon: <Clock className="h-4 w-4" /> },
+];
 
 export const Route = createFileRoute("/_authenticated/dashboard")({
   ssr: false,
@@ -77,16 +97,25 @@ const FILTERS = [
 
 type FilterId = (typeof FILTERS)[number]["id"];
 
+const MAILBOXES: { id: GmailMailbox; label: string; icon: React.ReactNode }[] = [
+  { id: "inbox", label: "Inbox", icon: <Inbox className="h-4 w-4" /> },
+  { id: "sent", label: "Sent", icon: <Send className="h-4 w-4" /> },
+  { id: "starred", label: "Starred", icon: <Star className="h-4 w-4" /> },
+  { id: "spam", label: "Spam", icon: <ShieldAlert className="h-4 w-4" /> },
+  { id: "trash", label: "Trash", icon: <Trash2 className="h-4 w-4" /> },
+  { id: "all", label: "All mail", icon: <Archive className="h-4 w-4" /> },
+];
+
 function DashboardPage() {
   const navigate = useNavigate();
   const [email, setEmail] = useState("");
   const [emails, setEmails] = useState<MockEmail[]>(seedEmails);
   const [query, setQuery] = useState("");
+  const [mailbox, setMailbox] = useState<GmailMailbox>("inbox");
   const [filter, setFilter] = useState<FilterId>("all");
-  const [selectedId, setSelectedId] = useState<string>(seedEmails[0].id);
+  const [selectedId, setSelectedId] = useState<string>(seedEmails[0]?.id ?? "");
   const [syncedAt, setSyncedAt] = useState<string>(new Date().toISOString());
   const [syncing, setSyncing] = useState(false);
-  const [syncIdx, setSyncIdx] = useState(0);
   const [auto, setAuto] = useState(false);
   const [snoozed, setSnoozed] = useState<Record<string, boolean>>({});
   const [done, setDone] = useState<Record<string, boolean>>({});
@@ -101,16 +130,23 @@ function DashboardPage() {
 
   const [composeOpen, setComposeOpen] = useState(false);
   const [composeTone, setComposeTone] = useState<Tone>("professional");
+  const [composePurpose, setComposePurpose] = useState<ComposePurpose>("general");
+  const [composeRecipient, setComposeRecipient] = useState("");
+  const [composeReason, setComposeReason] = useState("");
   const [composePrompt, setComposePrompt] = useState("");
   const [composeSubject, setComposeSubject] = useState("");
   const [composeBody, setComposeBody] = useState("");
   const [composeLoading, setComposeLoading] = useState(false);
+  const [sending, setSending] = useState(false);
 
   const [sentLog, setSentLog] = useState<SentItem[]>([]);
+  const [analyticsOpen, setAnalyticsOpen] = useState(false);
+  const analyticsRef = useRef<HTMLElement | null>(null);
 
   useEffect(() => {
     supabase.auth.getUser().then(({ data }) => setEmail(data.user?.email ?? ""));
-  }, []);
+    void handleSync(false);
+  }, [mailbox]);
 
   // Auto-sync every 60s
   useEffect(() => {
@@ -118,7 +154,7 @@ function DashboardPage() {
     const t = setInterval(() => handleSync(true), 60_000);
     return () => clearInterval(t);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [auto, syncIdx]);
+  }, [auto]);
 
   // Follow-up reminder scan every 20s — flags un-replied >6h old non-done critical/high
   useEffect(() => {
@@ -175,26 +211,48 @@ function DashboardPage() {
   }, [emails, done, snoozed, reminded]);
 
   async function handleSignOut() {
-    await supabase.auth.signOut();
+    try {
+      await supabase.auth.signOut();
+    } catch {
+      // Ignore Supabase sign-out errors and redirect to the auth screen.
+    }
+
     navigate({ to: "/auth", replace: true });
   }
 
-  function handleSync(silent = false) {
+  async function handleSync(silent = false) {
     if (syncing) return;
     setSyncing(true);
-    setTimeout(() => {
-      const batch = syncBatches[syncIdx % syncBatches.length];
-      const fresh = batch.filter((b) => !emails.some((e) => e.id === b.id));
-      if (fresh.length > 0) {
-        setEmails((prev) => [...fresh, ...prev]);
-        if (!silent) toast.success(`Synced ${fresh.length} new email${fresh.length > 1 ? "s" : ""}`);
-      } else if (!silent) {
-        toast("Inbox is up to date", { icon: "✓" });
+    try {
+      const provider = getConfiguredInboxProvider();
+      const { data } = await supabase.auth.getSession();
+      const providerToken = data.session?.provider_token ?? null;
+
+      if (!providerToken) {
+        if (!silent) {
+          toast.error("Connect with Google to load your real inbox.");
+        }
+        return;
       }
-      setSyncIdx((i) => i + 1);
-      setSyncedAt(new Date().toISOString());
+
+      const fresh = await fetchInboxMessages({
+        provider,
+        token: providerToken,
+        mailbox,
+      });
+
+      setEmails(fresh);
+      setSelectedId(fresh[0]?.id ?? "");
+      const label = provider === "realmails" ? "RealMails" : `${MAILBOXES.find((item) => item.id === mailbox)?.label ?? "Gmail"} mail`;
+      if (!silent) toast.success(`Synced ${fresh.length} ${label} message${fresh.length === 1 ? "" : "s"}`);
+    } catch (err) {
+      if (!silent) {
+        toast.error(err instanceof Error ? err.message : "Inbox sync failed");
+      }
+    } finally {
       setSyncing(false);
-    }, 700);
+      setSyncedAt(new Date().toISOString());
+    }
   }
 
   async function handleTriage() {
@@ -278,7 +336,15 @@ function DashboardPage() {
   async function runCompose() {
     setComposeLoading(true);
     try {
-      const out = await composeEmail({ data: { prompt: composePrompt, tone: composeTone } });
+      const out = await composeEmail({
+        data: {
+          prompt: composePrompt,
+          tone: composeTone,
+          purpose: composePurpose,
+          recipient: composeRecipient || undefined,
+          reason: composeReason || undefined,
+        },
+      });
       setComposeSubject(out.subject);
       setComposeBody(out.body);
     } catch (err) {
@@ -286,6 +352,32 @@ function DashboardPage() {
     } finally {
       setComposeLoading(false);
     }
+  }
+
+  async function sendMessage(to: string, subject: string, body: string, kind: "reply" | "compose", emailId?: string) {
+    if (!to.trim() || !subject.trim() || !body.trim()) return;
+    setSending(true);
+    try {
+      const { data } = await supabase.auth.getSession();
+      await sendGmailMessage({ token: data.session?.provider_token, to, subject, body });
+      setSentLog((log) => [...log, { id: `${kind[0]}-${Date.now()}`, subject, to, at: new Date().toISOString(), kind }]);
+      if (emailId) markDone(emailId);
+      toast.success("Message sent through Gmail");
+      setReplyOpen(false);
+      setComposeOpen(false);
+      setComposePrompt(""); setComposeReason(""); setComposeRecipient(""); setComposeSubject(""); setComposeBody(""); setComposePurpose("general");
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : "Could not send message");
+    } finally {
+      setSending(false);
+    }
+  }
+
+  function scrollToAnalytics() {
+    setAnalyticsOpen(true);
+    requestAnimationFrame(() => {
+      analyticsRef.current?.scrollIntoView({ behavior: "smooth", block: "start" });
+    });
   }
 
   function snooze(id: string) {
@@ -330,12 +422,34 @@ function DashboardPage() {
           <StatCard label="Deadlines < 48h" value={stats.dueSoon} icon={<Clock className="h-4 w-4 text-destructive" />} accent="text-destructive" pulse={stats.dueSoon > 0} />
           <StatCard label="Follow-ups" value={stats.reminders} icon={<Bell className="h-4 w-4 text-primary" />} pulse={stats.reminders > 0} />
         </div>
+        <div className="mx-auto max-w-7xl px-4 sm:px-6 pb-5 flex flex-wrap items-center gap-2 text-xs text-muted-foreground">
+          <span className="inline-flex items-center gap-1.5 rounded-full border border-primary/25 bg-primary/10 px-3 py-1.5 text-primary"><Sparkles className="h-3.5 w-3.5" /> Inbox intelligence active</span>
+          <span>Prioritize the work that moves today forward.</span>
+        </div>
       </section>
 
       <section className="mx-auto w-full max-w-7xl flex-1 px-4 sm:px-6 py-6">
         <div className="grid gap-4 lg:grid-cols-[1.05fr_1.4fr]">
           <div className="rounded-2xl border border-border/70 bg-card/60 overflow-hidden flex flex-col min-h-[640px]">
             <div className="p-4 border-b border-border/70 space-y-3">
+              <div className="flex gap-1.5 overflow-x-auto pb-1">
+                {MAILBOXES.map((item) => (
+                  <button
+                    key={item.id}
+                    type="button"
+                    onClick={() => {
+                      setMailbox(item.id);
+                      setFilter("all");
+                    }}
+                    className={cn(
+                      "inline-flex shrink-0 items-center gap-1.5 rounded-lg px-3 py-2 text-xs font-medium transition-colors",
+                      mailbox === item.id ? "bg-primary text-primary-foreground shadow-[var(--shadow-gold)]" : "text-muted-foreground hover:bg-accent/50 hover:text-foreground",
+                    )}
+                  >
+                    {item.icon} {item.label}
+                  </button>
+                ))}
+              </div>
               <div className="relative">
                 <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
                 <Input
@@ -345,24 +459,35 @@ function DashboardPage() {
                   className="pl-9"
                 />
               </div>
-              <div className="flex items-center gap-1.5 overflow-x-auto -mx-1 px-1">
-                <Filter className="h-3.5 w-3.5 text-muted-foreground shrink-0" />
-                {FILTERS.map((f) => (
-                  <button
-                    key={f.id}
-                    onClick={() => setFilter(f.id)}
-                    className={cn(
-                      "text-xs px-2.5 py-1 rounded-full border transition-colors whitespace-nowrap",
-                      filter === f.id
-                        ? "bg-primary text-primary-foreground border-primary"
-                        : "border-border text-muted-foreground hover:text-foreground hover:border-foreground/30",
-                    )}
-                  >
-                    {f.label}
-                    {f.id === "reminders" && stats.reminders > 0 && (
-                      <span className="ml-1 text-[10px] tabular-nums">{stats.reminders}</span>
-                    )}
-                  </button>
+              <div className="flex flex-wrap items-center gap-2">
+                <div className="flex items-center gap-2 rounded-full border border-border/70 bg-background/70 px-2.5 py-1.5">
+                  <Filter className="h-3.5 w-3.5 text-muted-foreground shrink-0" />
+                  <Select value={filter} onValueChange={(value) => setFilter(value as FilterId)}>
+                    <SelectTrigger className="h-8 w-[150px] border-0 bg-transparent p-0 shadow-none focus:ring-0">
+                      <SelectValue placeholder="Mails" />
+                    </SelectTrigger>
+                    <SelectContent>
+                      {FILTERS.map((f) => (
+                        <SelectItem key={f.id} value={f.id}>
+                          {f.label}
+                          {f.id === "reminders" && stats.reminders > 0 ? ` (${stats.reminders})` : ""}
+                        </SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                </div>
+                <Button size="sm" variant="outline" onClick={() => setComposeOpen(true)} className="h-8 rounded-full px-3">
+                  <PenLine className="h-3.5 w-3.5" />
+                  <span className="ml-1.5">Compose</span>
+                </Button>
+                <Button size="sm" variant="outline" onClick={scrollToAnalytics} className="h-8 rounded-full px-3">
+                  <TrendingUp className="h-3.5 w-3.5" />
+                  <span className="ml-1.5">Triage Analytics</span>
+                </Button>
+                {FILTERS.slice(1, 4).map((quickFilter) => (
+                  <Button key={quickFilter.id} size="sm" variant={filter === quickFilter.id ? "secondary" : "ghost"} onClick={() => setFilter(quickFilter.id)} className="h-8 rounded-full px-3 text-xs">
+                    {quickFilter.label}
+                  </Button>
                 ))}
               </div>
             </div>
@@ -400,7 +525,11 @@ function DashboardPage() {
         </div>
       </section>
 
-      <InboxAnalytics emails={emails} sentLog={sentLog} />
+      {analyticsOpen && (
+        <section ref={analyticsRef} className="mx-auto w-full max-w-7xl px-4 sm:px-6 pb-8">
+          <InboxAnalytics emails={emails} sentLog={sentLog} />
+        </section>
+      )}
 
 
 
@@ -449,26 +578,10 @@ function DashboardPage() {
           <DialogFooter>
             <Button variant="ghost" onClick={() => setReplyOpen(false)}>Cancel</Button>
             <Button
-              onClick={() => {
-                if (selected) {
-                  setSentLog((l) => [
-                    ...l,
-                    {
-                      id: `r-${Date.now()}`,
-                      subject: `Re: ${selected.subject}`,
-                      to: selected.fromEmail,
-                      at: new Date().toISOString(),
-                      kind: "reply",
-                    },
-                  ]);
-                  markDone(selected.id);
-                }
-                toast.success("Reply sent (demo)");
-                setReplyOpen(false);
-              }}
-              disabled={!replyDraft.trim()}
+              onClick={() => selected && sendMessage(selected.fromEmail, `Re: ${selected.subject}`, replyDraft, "reply", selected.id)}
+              disabled={!replyDraft.trim() || sending}
             >
-              <Send className="h-4 w-4 mr-1.5" /> Send
+              {sending ? <Loader2 className="h-4 w-4 mr-1.5 animate-spin" /> : <Send className="h-4 w-4 mr-1.5" />} Send
             </Button>
           </DialogFooter>
         </DialogContent>
@@ -476,17 +589,36 @@ function DashboardPage() {
 
       {/* Compose dialog */}
       <Dialog open={composeOpen} onOpenChange={setComposeOpen}>
-        <DialogContent className="max-w-2xl">
+        <DialogContent className="max-w-3xl">
           <DialogHeader>
             <DialogTitle className="flex items-center gap-2">
               <PenLine className="h-4 w-4 text-primary" /> AI Composer
             </DialogTitle>
-            <DialogDescription>Describe the email — AI will draft it.</DialogDescription>
+            <DialogDescription>Choose the intent, explain the situation, and let AI shape the right message.</DialogDescription>
           </DialogHeader>
-          <div className="space-y-3">
-            <div className="flex items-center gap-2">
+          <div className="space-y-4">
+            <div className="grid grid-cols-2 gap-2 sm:grid-cols-4">
+              {COMPOSE_PURPOSES.map((purpose) => (
+                <button
+                  key={purpose.value}
+                  type="button"
+                  onClick={() => setComposePurpose(purpose.value)}
+                  className={cn(
+                    "rounded-xl border p-3 text-left transition-all hover:border-primary/60 hover:bg-primary/5",
+                    composePurpose === purpose.value ? "border-primary bg-primary/10 shadow-[var(--shadow-glow)]" : "border-border/70 bg-background/30",
+                  )}
+                >
+                  <span className={cn("flex items-center gap-2 text-sm font-medium", composePurpose === purpose.value ? "text-primary" : "text-foreground")}>
+                    {purpose.icon} {purpose.label}
+                  </span>
+                  <span className="mt-1 block text-[11px] leading-snug text-muted-foreground">{purpose.hint}</span>
+                </button>
+              ))}
+            </div>
+            <div className="grid gap-3 sm:grid-cols-2">
+              <Input placeholder="Recipient name or email (optional)" value={composeRecipient} onChange={(e) => setComposeRecipient(e.target.value)} />
               <Select value={composeTone} onValueChange={(v) => setComposeTone(v as Tone)}>
-                <SelectTrigger className="h-8 w-40"><SelectValue /></SelectTrigger>
+                <SelectTrigger><SelectValue /></SelectTrigger>
                 <SelectContent>
                   <SelectItem value="professional">Professional</SelectItem>
                   <SelectItem value="friendly">Friendly</SelectItem>
@@ -494,16 +626,26 @@ function DashboardPage() {
                   <SelectItem value="assertive">Assertive</SelectItem>
                 </SelectContent>
               </Select>
+            </div>
+            <div className="grid gap-3 sm:grid-cols-[1fr_auto]">
+              <Input placeholder="What is the reason or outcome you need? (e.g. need Friday off for a family appointment)" value={composeReason} onChange={(e) => setComposeReason(e.target.value)} />
+              <Button size="sm" onClick={runCompose} disabled={composeLoading || (composePrompt.trim().length < 3 && composeReason.trim().length < 3)} className="h-10 px-4">
+                {composeLoading ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Sparkles className="h-3.5 w-3.5" />}
+                <span className="ml-1.5">Draft with AI</span>
+              </Button>
+            </div>
+            <div className="flex items-center gap-2">
               <Input
-                placeholder="e.g. Ask Priya for a 1-day extension on the report"
+                placeholder="Extra details, links, dates, or constraints"
                 value={composePrompt}
                 onChange={(e) => setComposePrompt(e.target.value)}
-                className="h-8 flex-1"
+                className="h-9 flex-1"
               />
-              <Button size="sm" onClick={runCompose} disabled={composeLoading || composePrompt.trim().length < 3}>
-                {composeLoading ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Sparkles className="h-3.5 w-3.5" />}
-                <span className="ml-1.5">Draft</span>
-              </Button>
+              <span className="hidden text-[11px] text-muted-foreground sm:inline">Optional details (may be left empty)</span>
+            </div>
+            <div className="flex items-center gap-2 border-t border-border/60 pt-3">
+              <span className="text-xs uppercase tracking-wider text-muted-foreground">Your draft</span>
+              <span className="text-xs text-muted-foreground">Review and edit before sending</span>
             </div>
             <Input placeholder="Subject" value={composeSubject} onChange={(e) => setComposeSubject(e.target.value)} />
             <Textarea rows={10} placeholder="Body" value={composeBody} onChange={(e) => setComposeBody(e.target.value)} />
@@ -511,24 +653,10 @@ function DashboardPage() {
           <DialogFooter>
             <Button variant="ghost" onClick={() => setComposeOpen(false)}>Cancel</Button>
             <Button
-              onClick={() => {
-                setSentLog((l) => [
-                  ...l,
-                  {
-                    id: `c-${Date.now()}`,
-                    subject: composeSubject,
-                    to: "draft@inbox",
-                    at: new Date().toISOString(),
-                    kind: "compose",
-                  },
-                ]);
-                toast.success("Email sent (demo)");
-                setComposeOpen(false);
-                setComposePrompt(""); setComposeSubject(""); setComposeBody("");
-              }}
-              disabled={!composeBody.trim() || !composeSubject.trim()}
+              onClick={() => sendMessage(composeRecipient, composeSubject, composeBody, "compose")}
+              disabled={!composeBody.trim() || !composeSubject.trim() || !composeRecipient.trim() || sending}
             >
-              <Send className="h-4 w-4 mr-1.5" /> Send
+              {sending ? <Loader2 className="h-4 w-4 mr-1.5 animate-spin" /> : <Send className="h-4 w-4 mr-1.5" />} Send via Gmail
             </Button>
           </DialogFooter>
         </DialogContent>
@@ -553,27 +681,31 @@ function TopBar({
           <span className="font-display text-base font-semibold tracking-tight text-gold">MailSense</span>
           <Badge variant="outline" className="ml-2 text-[10px] uppercase tracking-wider">Beta</Badge>
         </Link>
-        <div className="flex items-center gap-2">
-          <Button size="sm" variant="outline" onClick={onSync} disabled={syncing}>
-            {syncing ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <RefreshCw className="h-3.5 w-3.5" />}
-            <span className="ml-1.5 hidden sm:inline">Sync</span>
-          </Button>
-          <Button size="sm" variant={auto ? "default" : "outline"} onClick={onToggleAuto} title="Auto-sync every 60s">
-            <TimerReset className="h-3.5 w-3.5" />
-            <span className="ml-1.5 hidden sm:inline">{auto ? "Auto on" : "Auto"}</span>
-          </Button>
-          <Button size="sm" onClick={onCompose}>
-            <PenLine className="h-3.5 w-3.5" />
-            <span className="ml-1.5 hidden sm:inline">Compose</span>
-          </Button>
-          <span className="hidden md:inline text-[11px] text-muted-foreground ml-1">
-            synced {formatRelative(syncedAt)}
-          </span>
-          <span className="hidden sm:inline text-xs text-muted-foreground truncate max-w-[160px] ml-2">{email}</span>
-          <Button variant="ghost" size="sm" onClick={onSignOut}>
-            <LogOut className="h-4 w-4 sm:mr-1.5" />
-            <span className="hidden sm:inline">Sign out</span>
-          </Button>
+        <div className="flex flex-col items-end gap-2 sm:flex-row sm:items-center sm:gap-3">
+          <div className="flex flex-wrap items-center justify-end gap-2 rounded-full border border-border/70 bg-background/70 px-2 py-1.5 shadow-sm">
+            <Button size="sm" variant="outline" onClick={onSync} disabled={syncing} className="h-8 rounded-full px-3">
+              {syncing ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <RefreshCw className="h-3.5 w-3.5" />}
+              <span className="ml-1.5 hidden sm:inline">Sync</span>
+            </Button>
+            <Button size="sm" variant={auto ? "default" : "outline"} onClick={onToggleAuto} title="Auto-sync every 60s" className="h-8 rounded-full px-3">
+              <TimerReset className="h-3.5 w-3.5" />
+              <span className="ml-1.5 hidden sm:inline">{auto ? "Auto on" : "Auto"}</span>
+            </Button>
+            <Button size="sm" onClick={onCompose} className="h-8 rounded-full px-3">
+              <PenLine className="h-3.5 w-3.5" />
+              <span className="ml-1.5 hidden sm:inline">Compose</span>
+            </Button>
+          </div>
+          <div className="flex flex-wrap items-center justify-end gap-2 rounded-full border border-border/60 bg-muted/30 px-2 py-1.5">
+            <span className="hidden md:inline text-[11px] text-muted-foreground">
+              synced {formatRelative(syncedAt)}
+            </span>
+            <span className="hidden sm:inline text-xs text-muted-foreground truncate max-w-[160px]">{email}</span>
+            <Button variant="ghost" size="sm" onClick={onSignOut} className="h-8 rounded-full px-3">
+              <LogOut className="h-4 w-4 sm:mr-1.5" />
+              <span className="hidden sm:inline">Sign out</span>
+            </Button>
+          </div>
         </div>
       </div>
     </header>
